@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="반도체 FDC 설비 데이터 기반 자동 잔여수명 분석 워크벤치">
+  <title>FDC 자동 RUL 워크벤치</title>
+  <link rel="stylesheet" href="/static/styles.css?v=0.2.1">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="분석 설정">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">PHM</div>
+        <div><strong>RUL Workbench</strong><span>FAB Equipment Intelligence</span></div>
+      </div>
+
+      <section class="side-section">
+        <div class="section-kicker">01 · 데이터</div>
+        <label class="drop-zone" id="dropZone" for="fileInput">
+          <input id="fileInput" type="file" accept=".csv,.txt,.parquet,.pq" hidden>
+          <span class="upload-icon" aria-hidden="true">＋</span>
+          <strong id="fileLabel">FDC 파일 선택</strong>
+          <small>CSV 또는 Parquet · 최대 30MB</small>
+        </label>
+        <div class="sample-row">
+          <button class="text-button" data-sample="degradation">완만 열화 샘플</button>
+          <button class="text-button" data-sample="no_drift">정상 샘플</button>
+          <button class="text-button" data-sample="sudden_failure">급격 고장</button>
+        </div>
+      </section>
+
+      <section class="side-section settings-section">
+        <div class="section-kicker">02 · 분석 설정</div>
+        <div class="field-grid">
+          <label><span>시간 열</span><input id="timestampColumn" value="timestamp"></label>
+          <label class="full"><span>센서 열 <em>비우면 자동 선택</em></span><input id="sensorColumns" placeholder="SensorA, SensorB"></label>
+          <label><span>EWMA span</span><input id="ewmaSpan" type="number" value="8" min="1" max="200"></label>
+          <label><span>롤링 윈도우</span><input id="rollingWindow" type="number" value="10" min="2" max="500"></label>
+          <label><span>건강 기준 비율</span><input id="baselineFraction" type="number" value="0.25" min="0.06" max="0.79" step="0.05"></label>
+          <label><span>연속 이상점</span><input id="consecutivePoints" type="number" value="3" min="1" max="50"></label>
+          <label><span>경고 σ</span><input id="warningSigma" type="number" value="2" min="0.1" max="10" step="0.1"></label>
+          <label><span>고장 σ</span><input id="failureSigma" type="number" value="3" min="0.2" max="20" step="0.1"></label>
+          <label class="full"><span>최대 외삽 일수</span><input id="maxDays" type="number" value="3650" min="1" max="36500"></label>
+        </div>
+        <details class="model-options">
+          <summary>AutoML 후보 모델</summary>
+          <div id="modelOptions">
+            <label><input type="checkbox" value="선형 회귀" checked> 선형 회귀</label>
+            <label><input type="checkbox" value="다항 회귀" checked> 다항 회귀</label>
+            <label><input type="checkbox" value="지수 성장" checked> 지수 성장</label>
+            <label><input type="checkbox" value="SVR" checked> SVR</label>
+            <label><input type="checkbox" value="Gradient Boosting" checked> Gradient Boosting</label>
+            <label><input type="checkbox" value="XGBoost"> XGBoost</label>
+          </div>
+        </details>
+      </section>
+
+      <button id="analyzeButton" class="primary-button" disabled>RUL 분석 실행</button>
+      <div class="server-status"><span id="serverDot"></span><span id="serverText">분석 서비스 확인 중</span></div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">SEMICONDUCTOR EQUIPMENT HEALTH</p>
+          <h1>FDC 자동 잔여수명 분석</h1>
+        </div>
+        <div class="top-actions">
+          <span id="analysisStamp" class="analysis-stamp">분석 대기</span>
+          <button id="downloadButton" class="secondary-button" disabled>결과 JSON 저장</button>
+        </div>
+      </header>
+
+      <div id="errorBanner" class="error-banner" role="alert" hidden></div>
+
+      <section id="emptyState" class="empty-state">
+        <div class="empty-visual" aria-hidden="true">
+          <div class="signal signal-a"></div><div class="signal signal-b"></div><div class="signal signal-c"></div>
+          <div class="threshold-line"></div>
+        </div>
+        <p class="eyebrow">READY FOR TRACE DATA</p>
+        <h2>설비 열화의 시작부터<br>고장 예상일까지 한 화면에서 확인하세요.</h2>
+        <p>왼쪽에서 FDC 파일을 선택하거나 완만 열화 샘플로 전체 분석 흐름을 시작할 수 있습니다.</p>
+        <button class="secondary-button" data-sample="degradation">샘플 데이터로 둘러보기</button>
+      </section>
+
+      <section id="loadingState" class="loading-state" hidden aria-live="polite">
+        <div class="loading-orbit"><span></span></div>
+        <p class="eyebrow">AUTOMATED PHM PIPELINE</p>
+        <h2 id="loadingTitle">입력 데이터 검증 중</h2>
+        <p id="loadingDetail">시간축과 센서 열을 확인하고 있습니다.</p>
+        <div class="loading-track"><span id="loadingProgress"></span></div>
+      </section>
+
+      <section id="results" hidden>
+        <div id="statusBanner" class="status-banner">
+          <div><span class="status-dot"></span><div><small>설비 판정</small><strong id="systemStatus">-</strong></div></div>
+          <p id="statusNarrative">-</p>
+        </div>
+
+        <div class="kpi-grid">
+          <article class="kpi-card"><span>예상 고장일</span><strong id="failureDate">-</strong><small id="failureTime">-</small></article>
+          <article class="kpi-card"><span>잔여수명</span><strong id="rulDays">-</strong><small id="rulHours">-</small></article>
+          <article class="kpi-card"><span>주요 위험 센서</span><strong id="criticalSensor">-</strong><small id="activeSensorCount">-</small></article>
+          <article class="kpi-card"><span>분석 기준</span><strong id="analysisDate">-</strong><small id="analysisDuration">-</small></article>
+        </div>
+
+        <nav class="tabs" aria-label="분석 결과 보기">
+          <button class="tab active" data-tab="overview">진단 개요</button>
+          <button class="tab" data-tab="sensor">센서 추세</button>
+          <button class="tab" data-tab="automl">AutoML 비교</button>
+          <button class="tab" data-tab="raw">원시 데이터</button>
+        </nav>
+
+        <div class="tab-panel active" id="tab-overview">
+          <section class="panel process-panel">
+            <div class="panel-heading"><div><p class="eyebrow">PIPELINE TRACE</p><h2>분석 과정과 판정 근거</h2></div><span>단계별 결과</span></div>
+            <div id="processSteps" class="process-steps"></div>
+          </section>
+
+          <div class="dashboard-grid">
+            <section class="panel span-8">
+              <div class="panel-heading"><div><p class="eyebrow">RAW-SCALE TRAJECTORY</p><h2>주요 센서 열화 궤적</h2></div><select id="overviewSensor" aria-label="개요 센서 선택"></select></div>
+              <div id="overviewLegend" class="chart-legend"></div>
+              <div class="canvas-wrap"><canvas id="overviewChart"></canvas><div id="overviewFormula" class="chart-formula"></div></div>
+            </section>
+            <section class="panel span-4">
+              <div class="panel-heading"><div><p class="eyebrow">HEALTH INDEX</p><h2>통합 건강 이상점수</h2></div><span>파생 지표</span></div>
+              <div class="score-key"><span><i class="warning"></i>2σ 경고</span><span><i class="failure"></i>3σ 고장</span></div>
+              <div class="health-canvas"><canvas id="healthChart"></canvas></div>
+              <p id="healthDescription" class="panel-note"></p>
+            </section>
+            <section class="panel span-7">
+              <div class="panel-heading"><div><p class="eyebrow">DATA READINESS</p><h2>데이터 품질 요약</h2></div><span id="sourceFileName">-</span></div>
+              <div id="qualityGrid" class="quality-grid"></div>
+            </section>
+            <section class="panel span-5">
+              <div class="panel-heading"><div><p class="eyebrow">ENGINEERING NOTES</p><h2>해석 시 주의사항</h2></div></div>
+              <ul id="warningList" class="warning-list"></ul>
+            </section>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="tab-sensor">
+          <div class="sensor-toolbar"><div id="sensorButtons" class="sensor-buttons"></div></div>
+          <section class="panel">
+            <div class="sensor-title-row"><div><p class="eyebrow">SENSOR DEGRADATION DETAIL</p><h2 id="sensorTitle">-</h2></div><span id="sensorStatus" class="status-chip">-</span></div>
+            <div id="sensorLegend" class="chart-legend interactive"></div>
+            <div class="large-canvas canvas-wrap"><canvas id="sensorChart"></canvas><div id="sensorFormula" class="chart-formula"></div></div>
+          </section>
+          <div class="sensor-detail-grid">
+            <section class="panel"><div class="panel-heading"><h2>관리 한계·시점</h2></div><dl id="thresholdDetails" class="definition-list"></dl></section>
+            <section class="panel"><div class="panel-heading"><h2>최신 특징값</h2></div><div id="featureGrid" class="feature-grid"></div></section>
+            <section class="panel"><div class="panel-heading"><h2>선택 모델 성능</h2></div><div id="metricGrid" class="feature-grid"></div></section>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="tab-automl">
+          <section class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">TIME-SERIES MODEL SELECTION</p><h2>AutoML 후보 비교</h2></div><select id="automlSensor" aria-label="AutoML 센서 선택"></select></div>
+            <div id="modelSummary" class="model-summary"></div>
+            <div class="table-wrap"><table><thead><tr><th>순위</th><th>모델</th><th>파라미터</th><th>CV RMSE</th><th>CV R²</th><th>AIC</th><th>BIC</th><th>선택 점수</th></tr></thead><tbody id="leaderboardBody"></tbody></table></div>
+          </section>
+        </div>
+
+        <div class="tab-panel" id="tab-raw">
+          <section class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">LATEST RAW OBSERVATIONS</p><h2>최근 원시 데이터 40개</h2></div><span>정규화되지 않은 계측값</span></div>
+            <div class="table-wrap raw-table"><table><thead id="rawHead"></thead><tbody id="rawBody"></tbody></table></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js?v=0.2.1" defer></script>
+</body>
+</html>
