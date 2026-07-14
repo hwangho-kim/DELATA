@@ -1,0 +1,21 @@
+# Python 캐시/빌드 결과
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 개발 환경과 도구 캐시
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+
+# 실행 시 생성되는 RUL 결과물
+rul_output/
+demo_output/
+example_output/
+*_output/
+
